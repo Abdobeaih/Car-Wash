@@ -4,6 +4,12 @@ import type { Metadata } from 'next';
 import { API_URL } from '@/lib/api';
 import type { CarService } from '@/lib/types';
 import { formatMoney } from '@/components/Badges';
+import heroCarWash from '../../public/images/services/pngtree-car-wash-fast-delicate-png-image_15497309.png';
+import heroCartoon from '../../public/images/services/pngtree-cartoon-illustration-of-car-wash-service-png-image_15194039.png';
+import heroLogo from '../../public/images/services/تصميم-شعار-لوجو-مغسلة-سيارات.jpg.webp';
+import heroWindows from '../../public/images/services/ما-أهمية-غسيل-السيارات-وهل-هو-ضروري؟-ماذا-عن-النوافذ؟-6.jpg';
+
+const heroImages = [heroCarWash, heroCartoon, heroLogo, heroWindows];
 
 export const metadata: Metadata = {
   title: 'Mobile CarCare — Professional Mobile Car Care Services',
@@ -54,14 +60,14 @@ export default async function HomePage() {
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
-            {services.slice(0, 4).map((service) => (
+            {services.slice(0, 4).map((service, index) => (
               <Link
                 key={service._id}
                 href={`/services/${service.slug}`}
                 className="card group p-4 transition hover:shadow-md"
               >
                 <Image
-                  src={service.image}
+                  src={heroImages[index % heroImages.length]}
                   alt={service.name}
                   width={200}
                   height={130}
