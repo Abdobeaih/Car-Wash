@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 260" role="img" aria-label="Full car detailing">
+  <rect width="400" height="260" rx="16" fill="#dcfce7" />
+  <path d="M130 120h140l-16 44H146l-16-44z" fill="#22c55e" />
+  <path d="M146 120l14-46h80l14 46" fill="#4ade80" />
+  <rect x="142" y="162" width="16" height="26" rx="6" fill="#166534" />
+  <rect x="242" y="162" width="16" height="26" rx="6" fill="#166534" />
+  <path d="M78 212c20-8 40-8 60 0M262 212c20-8 40-8 60 0" stroke="#15803d" strokeWidth="6" strokeLinecap="round" />
+  <path d="M190 90l14 16 24-6-14 16 20 18-24 6 6 24-18-14-18 14 6-24-24-6 20-18-14-16 24 6z" fill="#fbbf24" />
+</svg>

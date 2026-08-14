@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 260" role="img" aria-label="Exterior car wash">
+  <rect width="400" height="260" rx="16" fill="#e0f2fe" />
+  <circle cx="200" cy="70" r="34" fill="#bae6fd" />
+  <path d="M120 150h160l-12 44H132l-12-44z" fill="#3b82f6" />
+  <path d="M132 150l14-52h108l14 52" fill="#60a5fa" />
+  <rect x="128" y="190" width="14" height="26" rx="6" fill="#1e3a8a" />
+  <rect x="258" y="190" width="14" height="26" rx="6" fill="#1e3a8a" />
+  <path d="M60 210c18-8 36-8 54 0M286 210c18-8 36-8 54 0" stroke="#1e40af" strokeWidth="6" strokeLinecap="round" />
+</svg>
