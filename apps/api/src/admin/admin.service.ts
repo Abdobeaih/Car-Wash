@@ -120,7 +120,7 @@ export class AdminService {
 
     let ids: Types.ObjectId[] = [];
     if (search) {
-      const regex = { $regex: search, $options: 'i' } as unknown;
+      const regex = new RegExp(search, 'i');
       const users = await this.userModel
         .find({ $or: [{ name: regex }, { email: regex }] }, { _id: 1 })
         .exec();
@@ -185,7 +185,7 @@ export class AdminService {
     return Promise.all(
       customers.map(async (c) => {
         const bookingCount = await this.bookingModel.countDocuments({
-          customerId: c._id,
+          customerId: c._id.toString(),
         });
         return {
           _id: c._id.toString(),

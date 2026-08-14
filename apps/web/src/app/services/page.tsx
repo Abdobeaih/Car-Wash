@@ -14,9 +14,13 @@ export const metadata: Metadata = {
 };
 
 async function getServices(): Promise<CarService[]> {
-  const res = await fetch(`${API_URL}/services`, { next: { revalidate: 60 } });
-  if (!res.ok) return [];
-  return (await res.json()) as CarService[];
+  try {
+    const res = await fetch(`${API_URL}/services`, { next: { revalidate: 60 } });
+    if (!res.ok) return [];
+    return (await res.json()) as CarService[];
+  } catch {
+    return [];
+  }
 }
 
 export default async function ServicesPage() {
