@@ -7,6 +7,8 @@ import type { AddOn, CarService } from '@/lib/types';
 import { formatMoney } from '@/components/Badges';
 import BackToDashboard from '@/components/BackToDashboard';
 
+export const dynamic = 'force-dynamic';
+
 async function getService(slug: string): Promise<CarService | null> {
   try {
     const res = await fetch(`${API_URL}/services/${slug}`, { next: { revalidate: 60 } });

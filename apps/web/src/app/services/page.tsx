@@ -7,6 +7,8 @@ import { formatMoney } from '@/components/Badges';
 import { EmptyState } from '@/components/States';
 import BackToDashboard from '@/components/BackToDashboard';
 
+export const dynamic = 'force-dynamic';
+
 export const metadata: Metadata = {
   title: 'Services',
   description:

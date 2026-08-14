@@ -11,6 +11,8 @@ import heroWindows from '../../public/images/services/ما-أهمية-غسيل-�
 
 const heroImages = [heroCarWash, heroCartoon, heroLogo, heroWindows];
 
+export const dynamic = 'force-dynamic';
+
 export const metadata: Metadata = {
   title: 'Mobile CarCare — Professional Mobile Car Care Services',
   description:
