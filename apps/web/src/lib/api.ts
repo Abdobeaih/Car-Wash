@@ -1,18 +1,14 @@
 import type { ApiErrorShape } from './types';
 
 export function getApiUrl(): string {
-  return process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+  // Browser: call the same-origin proxy (/api/*) so the API URL never has to
+  // be exposed in the client bundle and CORS is not required.
+  if (typeof window !== 'undefined') return '/api';
+  // Server (SSR/ISR): call the real API directly.
+  return process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 }
 
 export const API_URL = getApiUrl();
-
-function assertApiUrlConfigured(): void {
-  if (!process.env.NEXT_PUBLIC_API_URL && process.env.NODE_ENV === 'production') {
-    throw new Error(
-      'NEXT_PUBLIC_API_URL is not configured. Set it to your deployed API URL in the Vercel environment variables for this project.',
-    );
-  }
-}
 
 const TOKEN_KEY = 'mcc_token';
 
@@ -63,8 +59,6 @@ export async function apiRequest<T>(
   options: RequestOptions = {},
 ): Promise<T> {
   const { method = 'GET', body, auth = false } = options;
-
-  assertApiUrlConfigured();
 
   const headers: Record<string, string> = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
