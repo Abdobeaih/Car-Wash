@@ -112,16 +112,30 @@ export class SeedService implements OnApplicationBootstrap {
   }
 
   private async seedUsers(): Promise<void> {
+    const adminName = this.configService.get<string>('SEED_ADMIN_NAME') ?? 'Admin User';
     const adminEmail = this.configService.get<string>('SEED_ADMIN_EMAIL') ?? 'admin@example.com';
-    const adminExists = await this.userModel.exists({ email: adminEmail });
-    if (!adminExists) {
+    const adminPassword = this.configService.get<string>('SEED_ADMIN_PASSWORD') ?? 'AdminPass123!';
+
+    const existingAdmin = await this.userModel
+      .findOne({ email: adminEmail })
+      .select('+password')
+      .exec();
+    if (existingAdmin) {
+      const passwordMatches = await bcrypt.compare(adminPassword, existingAdmin.password);
+      if (existingAdmin.role !== UserRole.ADMIN || !passwordMatches) {
+        existingAdmin.name = adminName;
+        existingAdmin.role = UserRole.ADMIN;
+        if (!passwordMatches) {
+          existingAdmin.password = await bcrypt.hash(adminPassword, 12);
+        }
+        await existingAdmin.save();
+        this.logger.log(`Updated admin credentials to match SEED_ADMIN_* (${adminEmail}).`);
+      }
+    } else {
       await this.userModel.create({
-        name: this.configService.get<string>('SEED_ADMIN_NAME') ?? 'Admin User',
+        name: adminName,
         email: adminEmail,
-        password: await bcrypt.hash(
-          this.configService.get<string>('SEED_ADMIN_PASSWORD') ?? 'AdminPass123!',
-          12,
-        ),
+        password: await bcrypt.hash(adminPassword, 12),
         role: UserRole.ADMIN,
       });
       this.logger.log(`Seeded admin user: ${adminEmail}`);
