@@ -4,6 +4,7 @@
   "private": true,
   "description": "Mobile Car Care — Next.js frontend",
   "scripts": {
+    "predev": "node -e \"try{require('fs').unlinkSync('.next/dev/lock')}catch(e){}\"",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
