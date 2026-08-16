@@ -48,9 +48,6 @@ export default function DashboardShell({ children }: { children: React.ReactNode
                   : 'bg-white text-gray-600 hover:bg-gray-100'
               }`}
             />
-            <Link href="/book" className="shrink-0 rounded-lg bg-gray-900 px-4 py-2.5 text-center text-sm font-medium text-white hover:bg-gray-800 lg:mt-2">
-              Book a Service
-            </Link>
           </nav>
         </aside>
         <div className="min-w-0">{children}</div>
