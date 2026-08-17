@@ -4,6 +4,9 @@ A full-stack web app for booking **mobile car care services** — the provider c
 
 ## Documentation
 
+For bilingual English-Arabic explanations, representative code, and 30 questions with answers, read the [Bilingual Guide and Questions](docs/Bilingual-Guide-and-Questions.pdf) or its [Markdown source](docs/Bilingual-Guide-and-Questions.md).
+
+
 For a complete explanation of the architecture, setup, customer and admin workflows, API routes, data model, deployment steps, verification results, and known limitations, read the [Mobile CarCare Application Guide](docs/Mobile-CarCare-Application-Guide.pdf).
 
 ## Features
