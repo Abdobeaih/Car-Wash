@@ -2,6 +2,10 @@
 
 A full-stack web app for booking **mobile car care services** — the provider comes to the customer's location instead of the other way around.
 
+## Documentation
+
+For a complete explanation of the architecture, setup, customer and admin workflows, API routes, data model, deployment steps, verification results, and known limitations, read the [Mobile CarCare Application Guide](docs/Mobile-CarCare-Application-Guide.pdf).
+
 ## Features
 
 - Browse services & add-ons
