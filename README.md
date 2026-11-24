@@ -1,6 +1,16 @@
 # Mobile Car Care 🚗
 
-A full-stack web app for booking **mobile car care services** — the provider comes to the customer's location instead of the other way around.
+A full-stack car-care booking project with customer booking and an admin management interface.
+
+**Current live website:** https://mobilecarcare.vercel.app
+
+![Current Mobile Car Care homepage](https://raw.githubusercontent.com/Abdobeaih/Abdobeaih/main/assets/mobile-carcare.svg)
+
+The current deployed frontend has a black/lime design, English/Arabic pages, a car-and-curtain intro, and an admin dashboard with booking and manually recorded payment analytics. It does not process online payments.
+
+## Current code and this repository
+
+The active frontend is [Car-Wash-fronend](https://github.com/Abdobeaih/Car-Wash-fronend) and the active API is [Car-Wash-backend](https://github.com/Abdobeaih/Car-Wash-backend). This combined repository contains an earlier monorepo implementation and documentation. Its setup commands, API table and roadmap below describe that snapshot, not every feature or deployment setting of the current live application. Use the active repositories for the current implementation.
 
 ## Documentation
 
@@ -13,10 +23,10 @@ For a complete explanation of the architecture, setup, customer and admin workfl
 
 - Browse services & add-ons
 - JWT auth (register / login / logout)
-- Customer dashboard — manage vehicles & bookings
+- Customer dashboard | manage vehicles & bookings
 - Multi-step booking flow: service → vehicle → add-ons → location → date → time → review → confirm
 - Backend-driven pricing & availability (no double-booking)
-- Admin dashboard — services, add-ons, bookings, customers, calendar
+- Admin dashboard | services, add-ons, bookings, customers, calendar
 - Responsive (360px–1440px) & SEO-friendly
 
 ## Tech Stack
@@ -50,7 +60,7 @@ npm run dev:api     # http://localhost:3001
 npm run dev:web     # http://localhost:3000
 ```
 
-The API seeds demo services, add-ons, and users on first run (credentials printed to console — dev only).
+The API seeds demo services, add-ons, and users on first run (credentials printed to console | dev only).
 
 ### Env Variables
 
@@ -92,11 +102,11 @@ npm run test         # run tests
 
 - Working hours: `09:00–18:00` (centrally configured)
 - Backend computes open slots from working hours, service duration & existing bookings
-- Backend always calculates final price — frontend totals aren't trusted
+- Backend always calculates final price | frontend totals aren't trusted
 - Overlapping bookings return `409 Conflict`
 - Customers can cancel `PENDING`/`CONFIRMED` bookings only
 
-## Roadmap
+## Earlier monorepo roadmap
 
 - Real payment gateway
 - Email/SMS notifications
