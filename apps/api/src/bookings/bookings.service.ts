@@ -3,20 +3,23 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, ClientSession } from 'mongoose';
 import { Vehicle } from '../vehicles/schemas/vehicle.schema';
 import { CarService } from '../services/schemas/service.schema';
 import { AddOn } from '../addons/schemas/addon.schema';
 import { Booking, BookingDocument, BookingStatus } from './schemas/booking.schema';
 import { CreateBookingDto } from './dto/create-booking.dto';
-import { workingStartMinutes, workingEndMinutes } from './working-hours.util';
+import { workingStartMinutes, workingEndMinutes, toMinutes, toHHMM } from './working-hours.util';
 import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class BookingsService {
+  private readonly logger = new Logger(BookingsService.name);
+
   constructor(
     @InjectModel(Booking.name) private readonly bookingModel: Model<BookingDocument>,
     @InjectModel(Vehicle.name) private readonly vehicleModel: Model<Vehicle>,
@@ -25,7 +28,16 @@ export class BookingsService {
     private readonly notificationsService: NotificationsService,
   ) {}
 
-  async create(customerId: string, dto: CreateBookingDto): Promise<BookingDocument> {
+  async create(
+    customerId: string,
+    dto: CreateBookingDto,
+    coverage?: {
+      session: ClientSession;
+      enrollmentId: string;
+      redemptionKey: string;
+      requestFingerprint: string;
+    },
+  ): Promise<BookingDocument> {
     const vehicle = await this.vehicleModel
       .findOne({ _id: dto.vehicleId, userId: customerId })
       .exec();
@@ -76,17 +88,18 @@ export class BookingsService {
     this.validateTimeWithinWorkingHours(dto.startTime, totalDuration);
 
     const endTime = this.computeEndTime(dto.startTime, totalDuration);
-    if (this.timeToMinutes(endTime) > workingEndMinutes()) {
+    if (toMinutes(endTime) > workingEndMinutes()) {
       throw new BadRequestException('The requested time is outside working hours.');
     }
 
-    const conflicts = await this.bookingModel
-      .findOne({
-        date: dto.date,
-        status: { $ne: BookingStatus.CANCELLED },
-        $or: [{ startTime: { $lt: endTime }, endTime: { $gt: dto.startTime } }],
-      })
-      .exec();
+    const conflictQuery = this.bookingModel.findOne({
+      date: dto.date,
+      status: { $ne: BookingStatus.CANCELLED },
+      $or: [{ startTime: { $lt: endTime }, endTime: { $gt: dto.startTime } }],
+    });
+    const conflicts = await (
+      coverage ? conflictQuery.session(coverage.session) : conflictQuery
+    ).exec();
 
     if (conflicts) {
       throw new ConflictException('This time slot is no longer available.');
@@ -105,22 +118,30 @@ export class BookingsService {
         serviceId,
         addOnIds,
         duration,
-        subtotal,
+        subtotal: coverage ? 0 : subtotal,
       })),
       date: dto.date,
       startTime: dto.startTime,
       endTime,
       duration: totalDuration,
-      subtotal,
-      total,
+      subtotal: coverage ? 0 : subtotal,
+      total: coverage ? 0 : total,
+      ...(coverage
+        ? {
+            enrollmentId: coverage.enrollmentId,
+            redemptionKey: coverage.redemptionKey,
+            requestFingerprint: coverage.requestFingerprint,
+          }
+        : {}),
       status: BookingStatus.PENDING,
-      paymentStatus: 'PENDING',
+      paymentStatus: coverage ? 'PAID' : 'PENDING',
       location: dto.location,
     });
 
-    const saved = await created.save();
+    const saved = await created.save(coverage ? { session: coverage.session } : undefined);
     const populated = await this.populateBooking(saved);
-    await this.notificationsService.notifyAdminsOfNewBooking(populated);
+    if (!coverage)
+      await this.safeNotify(() => this.notificationsService.notifyAdminsOfNewBooking(populated));
     return populated;
   }
 
@@ -148,6 +169,11 @@ export class BookingsService {
     if (!booking) {
       throw new NotFoundException('Booking not found.');
     }
+    if (booking.enrollmentId) {
+      throw new BadRequestException(
+        'Plan visits must be cancelled through the plan visit workflow.',
+      );
+    }
     if (booking.status === BookingStatus.COMPLETED) {
       throw new ForbiddenException('Completed bookings cannot be cancelled.');
     }
@@ -157,19 +183,38 @@ export class BookingsService {
     booking.status = BookingStatus.CANCELLED;
     const saved = await booking.save();
     const populated = await this.populateBooking(saved);
-    await this.notificationsService.notifyAdminsOfCancellation(populated);
+    await this.safeNotify(() => this.notificationsService.notifyAdminsOfCancellation(populated));
     return populated;
   }
 
   private validateDate(date: string): void {
-    const parsed = new Date(`${date}T00:00:00`);
-    if (Number.isNaN(parsed.getTime())) {
+    const parsed = new Date(`${date}T00:00:00Z`);
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+      Number.isNaN(parsed.getTime()) ||
+      parsed.toISOString().slice(0, 10) !== date
+    ) {
       throw new BadRequestException('Invalid date.');
     }
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    if (parsed.getTime() < today.getTime()) {
+    // Bookings use the service's Cairo calendar, not the server's UTC day.
+    const parts = new Intl.DateTimeFormat('en', {
+      timeZone: 'Africa/Cairo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date());
+    const part = (type: string) => parts.find((value) => value.type === type)!.value;
+    const today = `${part('year')}-${part('month')}-${part('day')}`;
+    if (date < today) {
       throw new BadRequestException('Booking date cannot be in the past.');
+    }
+  }
+
+  private async safeNotify(notify: () => Promise<void>): Promise<void> {
+    try {
+      await notify();
+    } catch (err) {
+      this.logger.error('Failed to notify about booking change', err as Error);
     }
   }
 
@@ -181,23 +226,14 @@ export class BookingsService {
     if (h < 9 || h > 17 || (h === 17 && m > 0)) {
       throw new BadRequestException('Time must be within working hours (09:00 - 18:00).');
     }
-    const start = this.timeToMinutes(startTime);
+    const start = toMinutes(startTime);
     if (start < workingStartMinutes() || start + duration > workingEndMinutes()) {
       throw new BadRequestException('Time must be within working hours (09:00 - 18:00).');
     }
   }
 
   private computeEndTime(startTime: string, duration: number): string {
-    const start = this.timeToMinutes(startTime);
-    const end = start + duration;
-    const h = Math.floor(end / 60);
-    const m = end % 60;
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-  }
-
-  private timeToMinutes(time: string): number {
-    const [h, m] = time.split(':').map(Number);
-    return h * 60 + m;
+    return toHHMM(toMinutes(startTime) + duration);
   }
 
   private async populateBooking(booking: BookingDocument): Promise<BookingDocument> {
