@@ -1,20 +1,24 @@
-'use client';
+"use client";
 
-import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { useState, type FormEvent } from 'react';
-import { useAuth } from '@/lib/auth-context';
-import Button from '@/components/Button';
-import Input from '@/components/Input';
-import { Alert } from '@/components/States';
+import {getAuthErrorMessage} from '@/lib/auth-errors';
+import { useTranslations } from 'next-intl';
+import { Link, useRouter } from "@/i18n/navigation";
+import { useSearchParams } from "next/navigation";
+import { useState, type FormEvent } from "react";
+import { useAuth } from "@/lib/auth-context";
+import Button from "@/components/Button";
+import Input from "@/components/Input";
+import { Alert } from "@/components/States";
 
 export default function LoginForm() {
   const { login } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const next = searchParams.get('next');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const t = useTranslations('Login');
+ const authErrors=useTranslations('AuthErrors');
+  const next = searchParams.get("next");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -24,67 +28,87 @@ export default function LoginForm() {
     setSubmitting(true);
     try {
       const user = await login(email, password);
-      if (next && next.startsWith('/')) {
+      // Only same-site paths: reject protocol-relative (//host) and
+      // backslash variants (/\host), which browsers resolve externally.
+      if (next && next.startsWith("/") && !next.startsWith("//") && !next.includes("\\")) {
         router.push(next);
       } else {
-        router.push(user.role === 'ADMIN' ? '/admin' : '/dashboard');
+        router.push(user.role === "ADMIN" ? "/admin" : "/dashboard");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Login failed. Please try again.');
+      setError(
+        getAuthErrorMessage(err,t("error"),authErrors),
+      );
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <div className="card mx-auto w-full max-w-md">
-      <h1 className="text-2xl font-bold text-gray-900">Log in to your account</h1>
-      <p className="mt-1 text-sm text-gray-500">
-        Use your email address to sign in and manage your bookings.
+    <div className="mx-auto w-full max-w-md">
+      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M4 20a8 8 0 0 1 16 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      </div>
+      <h1 className="display-title mt-5 text-center text-2xl text-gray-900">
+        {t("title")}
+      </h1>
+      <p className="mt-2 text-center text-sm text-gray-500">
+        {t("subtitle")}
       </p>
 
       <form onSubmit={handleSubmit} className="mt-6" noValidate>
         {error && <Alert type="error">{error}</Alert>}
 
         <Input
-          label="Email"
+          label={t("email")}
           name="email"
-          type="email"
-          autoComplete="email"
+          type="text"
+          autoComplete="username"
           required
-          placeholder="you@example.com"
+          placeholder={t("emailPlaceholder")}
           value={email}
           onChange={(e) => setEmail(e.target.value)}
         />
         <Input
-          label="Password"
+          label={t("password")}
           name="password"
           type="password"
           autoComplete="current-password"
           required
-          placeholder="••••••••"
+          placeholder={t("passwordPlaceholder")}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
 
-        <div className="-mt-2 mb-4 text-right">
+        <div className="-mt-2 mb-4 text-end">
           <Link
             href="/forgot-password"
             className="text-sm font-medium text-brand-600 hover:text-brand-700"
           >
-            Forgot password?
+            {t("forgotPassword")}
           </Link>
         </div>
 
-        <Button type="submit" className="w-full" loading={submitting} disabled={submitting}>
-          Log in
+        <Button
+          type="submit"
+          className="w-full"
+          loading={submitting}
+          disabled={submitting}
+        >
+          {t("submit")}
         </Button>
       </form>
 
       <p className="mt-6 text-center text-sm text-gray-600">
-        Don&apos;t have an account?{' '}
-        <Link href="/register" className="font-medium text-brand-600 hover:text-brand-700">
-          Register now
+        {t("noAccount")}{" "}
+        <Link
+          href="/register"
+          className="font-medium text-brand-600 hover:text-brand-700"
+        >
+          {t("register")}
         </Link>
       </p>
     </div>
