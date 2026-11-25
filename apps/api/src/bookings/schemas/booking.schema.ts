@@ -1,5 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, SchemaTypes } from 'mongoose';
+import { HydratedDocument, SchemaTypes, Model, Error as MongooseError } from 'mongoose';
+import { ConflictException } from '@nestjs/common';
+import { toMinutes } from '../working-hours.util';
 
 export type BookingDocument = HydratedDocument<Booking>;
 
@@ -51,7 +53,7 @@ export class BookingServiceItem {
   subtotal: number;
 }
 
-@Schema({ timestamps: true })
+@Schema({ timestamps: true, optimisticConcurrency: true })
 export class Booking {
   @Prop({ required: true, type: SchemaTypes.ObjectId, ref: 'User', index: true })
   customerId: string;
@@ -80,6 +82,17 @@ export class Booking {
   @Prop({ required: true })
   duration: number;
 
+  @Prop({ type: SchemaTypes.ObjectId, ref: 'Enrollment' })
+  enrollmentId?: string;
+
+  @Prop()
+  redemptionKey?: string;
+  @Prop() requestFingerprint?: string;
+
+  // Server-derived minute keys. Never accepted from a client or backfilled over old data.
+  @Prop({ type: [String], select: false, default: undefined })
+  occupiedMinutes?: string[];
+
   @Prop({ required: true, min: 0 })
   subtotal: number;
 
@@ -92,6 +105,27 @@ export class Booking {
   @Prop({ required: true, enum: PaymentStatus, default: PaymentStatus.PENDING, type: String })
   paymentStatus: PaymentStatus;
 
+  // Manual bookkeeping only, not a payment processor or refund confirmation.
+  @Prop({
+    type: [
+      {
+        _id: false,
+        status: { type: String, enum: PaymentStatus },
+        recordedBy: { type: SchemaTypes.ObjectId, ref: 'User' },
+        recordedAt: Date,
+        reference: { type: String, maxlength: 200 },
+      },
+    ],
+    default: [],
+    select: false,
+  })
+  paymentHistory: {
+    status: PaymentStatus;
+    recordedBy: string;
+    recordedAt: Date;
+    reference?: string;
+  }[];
+
   @Prop({ required: true, type: BookingLocation })
   location: BookingLocation;
 }
@@ -99,3 +133,87 @@ export class Booking {
 export const BookingSchema = SchemaFactory.createForClass(Booking);
 BookingSchema.index({ date: 1, startTime: 1, endTime: 1 });
 BookingSchema.index({ customerId: 1, createdAt: -1 });
+
+// One service team, as enforced by the existing global overlap policy. A unique
+// multikey index reserves every occupied minute atomically, across API instances.
+// Empty/cancelled and legacy documents are excluded without rewriting old data.
+BookingSchema.index(
+  { occupiedMinutes: 1 },
+  {
+    unique: true,
+    name: 'booking_occupied_minutes_unique',
+    partialFilterExpression: { 'occupiedMinutes.0': { $exists: true } },
+  },
+);
+BookingSchema.post('init', function (document) {
+  document.$locals.originalStatus = document.status;
+});
+BookingSchema.post('save', function (document) {
+  document.$locals.originalStatus = document.status;
+});
+BookingSchema.set('toJSON', {
+  transform: (_document, result) => {
+    delete result.occupiedMinutes;
+    return result;
+  },
+});
+BookingSchema.pre('save', async function () {
+  const model = this.constructor as Model<Booking>;
+  // Older imported bookings may have no version field. Initialize it once so
+  // optimistic concurrency also protects two editors of those records.
+  if (!this.isNew && this.get('__v') === undefined) {
+    await model.collection.updateOne(
+      { _id: this._id, __v: { $exists: false } },
+      { $set: { __v: 0 } },
+    );
+    this.set('__v', 0);
+    this.unmarkModified('__v');
+  }
+  // Do not accept a booking before MongoDB has confirmed its enforcing index.
+  await model.init();
+  if (this.status === BookingStatus.CANCELLED) {
+    this.occupiedMinutes = [];
+    return;
+  }
+  const needsReservation =
+    this.isNew ||
+    this.isModified('date') ||
+    this.isModified('startTime') ||
+    this.isModified('endTime') ||
+    (this.isModified('status') && this.$locals.originalStatus === BookingStatus.CANCELLED);
+  // A status-only update must not rewrite or block an existing legacy booking.
+  if (!needsReservation) return;
+  const start = Math.floor(toMinutes(this.startTime));
+  const end = Math.ceil(toMinutes(this.endTime));
+  this.occupiedMinutes = Array.from({ length: end - start }, (_, i) => `${this.date}:${start + i}`);
+  // Legacy active bookings have no minute keys. Keep the original overlap check
+  // for them, including when an admin restores a cancelled booking.
+  const conflictQuery = model.exists({
+    _id: { $ne: this._id },
+    date: this.date,
+    status: { $ne: BookingStatus.CANCELLED },
+    startTime: { $lt: this.endTime },
+    endTime: { $gt: this.startTime },
+  });
+  const session = this.$session();
+  const conflict = await (session ? conflictQuery.session(session) : conflictQuery);
+  if (conflict) throw new ConflictException('This time slot is no longer available.');
+});
+BookingSchema.post(
+  'save',
+  function (
+    error: Error & { code?: number; keyPattern?: { occupiedMinutes?: number } },
+    _document: BookingDocument,
+    next: (error?: Error) => void,
+  ) {
+    if (error instanceof MongooseError.VersionError) {
+      return next(
+        new ConflictException('Booking changed while you were editing. Reload and try again.'),
+      );
+    }
+    if (error?.code === 11000 && error?.keyPattern?.occupiedMinutes) {
+      return next(new ConflictException('This time slot is no longer available.'));
+    }
+    next(error);
+  },
+);

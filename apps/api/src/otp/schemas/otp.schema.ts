@@ -1,0 +1,81 @@
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import { HydratedDocument } from 'mongoose';
+
+export enum OtpPurpose {
+  EMAIL_VERIFICATION = 'EMAIL_VERIFICATION',
+  PASSWORD_RESET = 'PASSWORD_RESET',
+}
+
+export enum OtpChannel {
+  EMAIL = 'EMAIL',
+  SMS = 'SMS',
+}
+
+export type OtpDocument = HydratedDocument<Otp>;
+
+@Schema({ timestamps: true })
+export class Otp {
+  @Prop({ required: true, lowercase: true, trim: true, index: true })
+  email: string;
+
+  @Prop({ required: true, enum: OtpPurpose, type: String, index: true })
+  purpose: OtpPurpose;
+
+  @Prop({ required: true, enum: OtpChannel, type: String, default: OtpChannel.EMAIL })
+  channel: OtpChannel;
+
+  @Prop({ required: true, trim: true })
+  target: string;
+
+  @Prop({ required: true })
+  otpHash: string;
+
+  @Prop({ required: true, type: Date })
+  expiresAt: Date;
+
+  @Prop({ required: true, default: 0 })
+  attempts: number;
+
+  @Prop({ required: true, default: false })
+  used: boolean;
+
+  @Prop({ required: true, default: 1 })
+  requestCount: number;
+
+  @Prop({ required: true, type: Date })
+  rateWindowStart: Date;
+
+  @Prop({ required: true, type: Date })
+  lastRequestAt: Date;
+
+  @Prop({ type: Date })
+  usedAt?: Date;
+
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
+export const OtpSchema = SchemaFactory.createForClass(Otp);
+OtpSchema.index({ email: 1, purpose: 1, createdAt: -1 });
+
+// One atomic issue budget per email, shared across purposes and instances.
+export type OtpQuotaDocument = HydratedDocument<OtpQuota>;
+@Schema({ collection: 'otp_quotas', versionKey: false })
+export class OtpQuota {
+  @Prop({ type: String, required: true })
+  _id: string;
+
+  @Prop({ required: true })
+  requestCount: number;
+
+  @Prop({ required: true, type: Date })
+  windowStart: Date;
+
+  @Prop({ required: true, type: Date })
+  lastRequestAt: Date;
+
+  @Prop({ required: true, type: Date })
+  expiresAt: Date;
+}
+export const OtpQuotaSchema = SchemaFactory.createForClass(OtpQuota);
+OtpQuotaSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });

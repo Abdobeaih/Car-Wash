@@ -1,4 +1,4 @@
-import { IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsOptional, IsString, Matches, MinLength } from 'class-validator';
 
 export class UpdateProfileDto {
   @IsOptional()
@@ -9,4 +9,10 @@ export class UpdateProfileDto {
   @IsOptional()
   @IsEmail({}, { message: 'A valid email is required' })
   email?: string;
+
+  @IsOptional()
+  @Matches(/^\+?\d{4,15}$/, {
+    message: 'Phone must be a valid international or national number',
+  })
+  phone?: string;
 }

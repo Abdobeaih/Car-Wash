@@ -8,9 +8,15 @@ A full-stack car-care booking project with customer booking and an admin managem
 
 The current deployed frontend has a black/lime design, English/Arabic pages, a car-and-curtain intro, and an admin dashboard with booking and manually recorded payment analytics. It does not process online payments.
 
-## Current code and this repository
+## This repository
 
-The active frontend is [Car-Wash-fronend](https://github.com/Abdobeaih/Car-Wash-fronend) and the active API is [Car-Wash-backend](https://github.com/Abdobeaih/Car-Wash-backend). This combined repository contains an earlier monorepo implementation and documentation. Its setup commands, API table and roadmap below describe that snapshot, not every feature or deployment setting of the current live application. Use the active repositories for the current implementation.
+This is the single home of Mobile Car Care: everything lives here in one repo.
+
+- `apps/web` — the current frontend (Next.js, TypeScript, Tailwind, bilingual EN/AR with next-intl), deployed at https://mobilecarcare.vercel.app
+- `apps/api` — the current REST API (NestJS, MongoDB, JWT auth, Gmail SMTP and Twilio SMS for OTP)
+- `docs/` — guides and documentation
+
+The earlier split repositories ([Car-Wash-fronend](https://github.com/Abdobeaih/Car-Wash-fronend), [Car-Wash-backend](https://github.com/Abdobeaih/Car-Wash-backend)) remain on GitHub as history only; new work happens here. `docs/repository-findings.md` is an architecture write-up of the earlier monorepo snapshot.
 
 ## Documentation
 
@@ -51,16 +57,13 @@ MongoDB is the single source of truth for pricing & availability.
 
 ```bash
 npm install
-
-cp .env.example .env
-cp apps/api/.env.example apps/api/.env
-cp apps/web/.env.example apps/web/.env.local
-
 npm run dev:api     # http://localhost:3001
 npm run dev:web     # http://localhost:3000
 ```
 
-The API seeds demo services, add-ons, and users on first run (credentials printed to console | dev only).
+Create the environment files listed below before starting the apps. Values are private to each deployment, so they are not stored in this repository.
+
+The API seeds the demo service catalog on first run. Login accounts are created only when the optional SEED_* variables below are set; this repository contains no credentials.
 
 ### Env Variables
 
@@ -68,10 +71,12 @@ The API seeds demo services, add-ons, and users on first run (credentials printe
 | -------- | ----- | ----------- |
 | `DATABASE_URL` | `apps/api/.env` | MongoDB connection string |
 | `JWT_SECRET` | `apps/api/.env` | JWT signing secret |
-| `JWT_EXPIRES_IN` | `apps/api/.env` | Token lifetime (e.g. `7d`) |
+| `JWT_EXPIRES_IN` | `apps/api/.env` | Token lifetime |
 | `PORT` | `apps/api/.env` | Backend port |
 | `CORS_ORIGINS` | `apps/api/.env` | Allowed origins (comma-separated) |
 | `NEXT_PUBLIC_API_URL` | `apps/web/.env.local` | Backend base URL |
+| `SEED_ADMIN_NAME` / `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` | `apps/api/.env` | Optional first-run admin account; leave unset to skip |
+| `SEED_CUSTOMER_NAME` / `SEED_CUSTOMER_EMAIL` / `SEED_CUSTOMER_PASSWORD` | `apps/api/.env` | Optional first-run demo customer; leave unset to skip |
 
 ### Commands
 
@@ -106,12 +111,10 @@ npm run test         # run tests
 - Overlapping bookings return `409 Conflict`
 - Customers can cancel `PENDING`/`CONFIRMED` bookings only
 
-## Earlier monorepo roadmap
+## Roadmap
 
 - Real payment gateway
-- Email/SMS notifications
 - Technician assignment & tracking
-- Multi-language support
 - Advanced analytics
 
 ## License

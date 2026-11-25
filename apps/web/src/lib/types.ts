@@ -1,10 +1,15 @@
 export type UserRole = 'CUSTOMER' | 'ADMIN';
 
+export type OtpChannel = 'EMAIL' | 'SMS';
+
 export interface User {
   _id: string;
   name: string;
   email: string;
+  phone?: string;
+  countryCode?: string;
   role: UserRole;
+  emailVerified?: boolean;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -12,6 +17,7 @@ export interface User {
 export interface AuthResponse {
   user: User;
   token: string;
+  requiresVerification?: boolean;
 }
 
 export interface MeResponse {
@@ -76,6 +82,7 @@ export interface BookingServiceItem {
 }
 
 export interface Booking {
+  enrollmentId?: string;
   _id: string;
   customerId: string;
   vehicleId: string | Vehicle;
@@ -90,6 +97,7 @@ export interface Booking {
   total: number;
   status: BookingStatus;
   paymentStatus: PaymentStatus;
+  paymentHistory?: { status: PaymentStatus; recordedBy: string; recordedAt: string; reference?: string }[];
   location: BookingLocation;
   createdAt?: string;
   updatedAt?: string;
@@ -132,6 +140,7 @@ export interface AdminDashboard {
   pendingBookings: number;
   confirmedBookings: number;
   completedBookings: number;
+  cancelledBookings?: number;
   customers: number;
   revenue: number;
 }
@@ -158,4 +167,12 @@ export interface ApiErrorShape {
   statusCode?: number;
   message?: string | string[];
   error?: string;
+}
+export interface AdminAnalytics {
+  range: { start: string; end: string; timeZone: string };
+  summary: { bookings: number; completed: number; cancelled: number; bookedValue: number;
+    completedValue: number; recordedPaid: number; outstanding: number; cancelledPaid: number };
+  daily: { _id: string; bookings: number; recordedPaid: number }[];
+  services: { _id: string; name: string; count: number; baseValue: number }[];
+  customers: { unique: number; returning: number };
 }

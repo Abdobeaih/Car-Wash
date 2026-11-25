@@ -1,6 +1,8 @@
 'use client';
 
-import Link from 'next/link';
+import {getAuthErrorMessage} from '@/lib/auth-errors';
+import { useTranslations } from 'next-intl';
+import { Link } from '@/i18n/navigation';
 import { useState, type FormEvent } from 'react';
 import { apiRequest } from '@/lib/api';
 import Button from '@/components/Button';
@@ -9,19 +11,20 @@ import { Alert } from '@/components/States';
 
 interface ForgotResponse {
   message?: string;
-  resetToken?: string | null;
 }
 
 export default function ForgotPasswordForm() {
+  const t = useTranslations('ForgotPassword');
+ const authErrors=useTranslations('AuthErrors');
   const [email, setEmail] = useState('');
-  const [token, setToken] = useState('');
+  const [otp, setOtp] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [resetTokenIssued, setResetTokenIssued] = useState(false);
+  const [codeSent, setCodeSent] = useState(false);
 
   const requestCode = async (e: FormEvent) => {
     e.preventDefault();
@@ -29,17 +32,16 @@ export default function ForgotPasswordForm() {
     setInfo(null);
     setSubmitting(true);
     try {
-      const res = await apiRequest<ForgotResponse>('/auth/forgot-password', {
+      await apiRequest<ForgotResponse>('/auth/forgot-password', {
         method: 'POST',
         body: { email },
       });
-      setInfo(res.message ?? '');
-      if (res.resetToken) {
-        setToken(res.resetToken);
-        setResetTokenIssued(true);
-      }
+      setInfo(t('codeSent'));
+      // The reset code is delivered to the user's email box; the backend never
+      // returns it in the response. Move to the code+password step regardless.
+      setCodeSent(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to request a reset code.');
+      setError(getAuthErrorMessage(err,t('requestError'),authErrors));
     } finally {
       setSubmitting(false);
     }
@@ -50,29 +52,39 @@ export default function ForgotPasswordForm() {
     setError(null);
     setSuccess(null);
     if (newPassword !== confirmPassword) {
-      setError('New password and confirmation do not match.');
+      setError(t('mismatchError'));
+      return;
+    }
+    if (!/^\d{6}$/.test(otp)) {
+      setError(t('otpError'));
       return;
     }
     setSubmitting(true);
     try {
-      const res = await apiRequest<{ message: string }>('/auth/reset-password', {
+      await apiRequest<{ message: string }>('/auth/reset-password', {
         method: 'POST',
-        body: { email, token, newPassword },
+        body: { email, otp, newPassword },
       });
-      setSuccess(res.message ?? 'Password reset successfully.');
-      setResetTokenIssued(false);
+      setSuccess(t('success'));
+      setCodeSent(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to reset password.');
+      setError(getAuthErrorMessage(err,t('resetError'),authErrors));
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <div className="card mx-auto w-full max-w-md">
-      <h1 className="text-2xl font-bold text-gray-900">Reset your password</h1>
-      <p className="mt-1 text-sm text-gray-500">
-        Enter your account email to receive a reset code, then choose a new password.
+    <div className="mx-auto w-full max-w-md">
+      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <rect x="4" y="10" width="16" height="10" rx="2" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M8 10V7a4 4 0 0 1 8 0v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      </div>
+      <h1 className="display-title mt-5 text-center text-2xl text-gray-900">{t('title')}</h1>
+      <p className="mt-2 text-center text-sm text-gray-500">
+        {t('subtitle')}
       </p>
 
       {success && (
@@ -80,7 +92,7 @@ export default function ForgotPasswordForm() {
           <Alert type="success">{success}</Alert>
           <p className="mt-4 text-center text-sm text-gray-600">
             <Link href="/login" className="font-medium text-brand-600 hover:text-brand-700">
-              Back to login
+              {t('backToLogin')}
             </Link>
           </p>
         </div>
@@ -88,21 +100,21 @@ export default function ForgotPasswordForm() {
 
       {!success && (
         <>
-          {!resetTokenIssued ? (
+          {!codeSent ? (
             <form onSubmit={requestCode} className="mt-6" noValidate>
               {error && <Alert type="error">{error}</Alert>}
               <Input
-                label="Email"
+                label={t('email')}
                 name="email"
                 type="email"
                 autoComplete="email"
                 required
-                placeholder="you@example.com"
+                placeholder={t('emailPlaceholder')}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
               <Button type="submit" className="w-full" loading={submitting} disabled={submitting}>
-                Send reset code
+                {t('sendCode')}
               </Button>
             </form>
           ) : (
@@ -110,15 +122,18 @@ export default function ForgotPasswordForm() {
               {info && <div className="mb-4"><Alert type="info">{info}</Alert></div>}
               {error && <Alert type="error">{error}</Alert>}
               <Input
-                label="Reset code"
-                name="token"
+                label={t('resetCode')}
+                name="otp"
                 required
                 autoComplete="off"
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
+                inputMode="numeric"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                value={otp}
+                onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
               />
               <Input
-                label="New password"
+                label={t('newPassword')}
                 name="newPassword"
                 type="password"
                 required
@@ -128,7 +143,7 @@ export default function ForgotPasswordForm() {
                 onChange={(e) => setNewPassword(e.target.value)}
               />
               <Input
-                label="Confirm new password"
+                label={t('confirmPassword')}
                 name="confirmPassword"
                 type="password"
                 required
@@ -138,20 +153,20 @@ export default function ForgotPasswordForm() {
                 onChange={(e) => setConfirmPassword(e.target.value)}
               />
               <Button type="submit" className="w-full" loading={submitting} disabled={submitting}>
-                Reset password
+                {t('reset')}
               </Button>
               <p className="mt-4 text-center text-sm">
                 <button
                   type="button"
                   className="font-medium text-gray-500 hover:text-gray-700"
                   onClick={() => {
-                    setResetTokenIssued(false);
-                    setToken('');
+                    setCodeSent(false);
+                    setOtp('');
                     setError(null);
                     setInfo(null);
                   }}
                 >
-                  Resend code
+                  {t('resend')}
                 </button>
               </p>
             </form>
@@ -160,9 +175,9 @@ export default function ForgotPasswordForm() {
       )}
 
       <p className="mt-6 text-center text-sm text-gray-600">
-        Remembered it?{' '}
+        {t('remembered')}{' '}
         <Link href="/login" className="font-medium text-brand-600 hover:text-brand-700">
-          Back to login
+          {t('backToLogin')}
         </Link>
       </p>
     </div>

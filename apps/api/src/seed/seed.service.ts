@@ -113,46 +113,57 @@ export class SeedService implements OnApplicationBootstrap {
 
   private async seedUsers(): Promise<void> {
     const adminName = this.configService.get<string>('SEED_ADMIN_NAME') ?? 'Admin User';
-    const adminEmail = this.configService.get<string>('SEED_ADMIN_EMAIL') ?? 'admin@example.com';
-    const adminPassword = this.configService.get<string>('SEED_ADMIN_PASSWORD') ?? 'AdminPass123!';
+    const adminEmail = this.configService.get<string>('SEED_ADMIN_EMAIL');
+    const adminPassword = this.configService.get<string>('SEED_ADMIN_PASSWORD');
+
+    // Seed users are created only from explicit SEED_* environment variables.
+    // There are no default credentials; never add fallbacks here.
+    if (!adminEmail || !adminPassword) {
+      this.logger.warn(
+        'SEED_ADMIN_EMAIL/SEED_ADMIN_PASSWORD are not set. Skipping user seeding.',
+      );
+      return;
+    }
 
     const existingAdmin = await this.userModel
       .findOne({ email: adminEmail })
       .select('+password')
       .exec();
     if (existingAdmin) {
-      const passwordMatches = await bcrypt.compare(adminPassword, existingAdmin.password);
-      if (existingAdmin.role !== UserRole.ADMIN || !passwordMatches) {
-        existingAdmin.name = adminName;
-        existingAdmin.role = UserRole.ADMIN;
-        if (!passwordMatches) {
-          existingAdmin.password = await bcrypt.hash(adminPassword, 12);
-        }
-        await existingAdmin.save();
-        this.logger.log(`Updated admin credentials to match SEED_ADMIN_* (${adminEmail}).`);
-      }
+      // Existing accounts are authoritative. Bootstrap must never restore an
+      // old password, promote an account or silently verify a changed address.
+      // The seed password is only used when creating the first admin.
+      this.logger.log('Existing admin seed account preserved.');
     } else {
       await this.userModel.create({
         name: adminName,
         email: adminEmail,
         password: await bcrypt.hash(adminPassword, 12),
         role: UserRole.ADMIN,
+        emailVerified: true,
       });
       this.logger.log(`Seeded admin user: ${adminEmail}`);
     }
 
-    const customerEmail =
-      this.configService.get<string>('SEED_CUSTOMER_EMAIL') ?? 'customer@example.com';
+    const customerEmail = this.configService.get<string>('SEED_CUSTOMER_EMAIL');
+    if (!customerEmail) {
+      return;
+    }
     const customerExists = await this.userModel.exists({ email: customerEmail });
     if (!customerExists) {
+      const customerPassword = this.configService.get<string>('SEED_CUSTOMER_PASSWORD');
+      if (!customerPassword) {
+        this.logger.warn(
+          'SEED_CUSTOMER_PASSWORD is not set. Skipping customer seeding.',
+        );
+        return;
+      }
       await this.userModel.create({
         name: this.configService.get<string>('SEED_CUSTOMER_NAME') ?? 'Demo Customer',
         email: customerEmail,
-        password: await bcrypt.hash(
-          this.configService.get<string>('SEED_CUSTOMER_PASSWORD') ?? 'CustomerPass123!',
-          12,
-        ),
+        password: await bcrypt.hash(customerPassword, 12),
         role: UserRole.CUSTOMER,
+        emailVerified: true,
       });
       this.logger.log(`Seeded customer user: ${customerEmail}`);
     }

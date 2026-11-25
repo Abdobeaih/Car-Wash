@@ -1,0 +1,221 @@
+/**
+ * Regression test for `property phone should not exist` (400).
+ * See src/bootstrap.ts — the global pipe uses whitelist + forbidNonWhitelisted,
+ * so any request-body field not declared on its DTO is rejected.
+ */
+import {
+  ValidationPipe,
+  BadRequestException,
+  type ArgumentMetadata,
+  type Type,
+} from '@nestjs/common';
+import { UpdateProfileDto } from '../src/auth/dto/update-profile.dto';
+import { RegisterDto } from '../src/auth/dto/register.dto';
+import { ResendVerificationDto } from '../src/auth/dto/resend-verification.dto';
+import { SendOtpDto } from '../src/otp/dto/send-otp.dto';
+import { OtpChannel } from '../src/otp/schemas/otp.schema';
+
+describe('Global ValidationPipe (whitelist + forbidNonWhitelisted)', () => {
+  const pipe = new ValidationPipe({
+    whitelist: true,
+    forbidNonWhitelisted: true,
+    transform: true,
+    transformOptions: { enableImplicitConversion: true },
+  });
+
+  const body = (metatype: Type): ArgumentMetadata => ({
+    type: 'body',
+    metatype,
+  });
+
+  const validationMessages = async (value: unknown, metatype: Type) => {
+    try {
+      await pipe.transform(value, body(metatype));
+      fail('expected the request to be rejected');
+    } catch (err) {
+      expect(err).toBeInstanceOf(BadRequestException);
+      const res = (err as BadRequestException).getResponse() as { message?: string | string[] };
+      return Array.isArray(res.message) ? res.message.join(' | ') : (res.message ?? '');
+    }
+    return '';
+  };
+
+  it('accepts phone in a profile update (the previously failing request)', async () => {
+    await expect(
+      pipe.transform({ name: 'Jane', phone: '+14155552671' }, body(UpdateProfileDto)),
+    ).resolves.toMatchObject({ phone: '+14155552671' });
+  });
+
+  it('accepts a profile update without phone', async () => {
+    await expect(pipe.transform({ name: 'Jane' }, body(UpdateProfileDto))).resolves.toMatchObject({
+      name: 'Jane',
+    });
+  });
+
+  it('rejects a malformed phone on profile update', async () => {
+    const messages = await validationMessages({ phone: 'abc' }, UpdateProfileDto);
+    expect(messages).toContain('Phone must be a valid international or national number');
+  });
+
+  it('still rejects unknown fields (no policy change)', async () => {
+    const messages = await validationMessages({ name: 'Jane', unexpected: true }, UpdateProfileDto);
+    expect(messages).toContain('property unexpected should not exist');
+  });
+
+  it('accepts the register SMS payload (phone + countryCode + channel)', async () => {
+    const payload = {
+      name: 'New User',
+      email: 'new@example.com',
+      password: 'password123',
+      verificationChannel: OtpChannel.SMS,
+      phone: '+14155552671',
+      countryCode: 'US',
+    };
+    await expect(pipe.transform(payload, body(RegisterDto))).resolves.toMatchObject({
+      phone: '+14155552671',
+      countryCode: 'US',
+    });
+  });
+
+  it('accepts the exact current frontend register payload (intl phone + countryCode)', async () => {
+    // Mirrors what src/app/register/page.tsx sends when the country list loads:
+    // separate country/dialCode/national-phone fields.
+    const payload = {
+      name: 'New User',
+      email: 'new@example.com',
+      password: 'password123',
+      verificationChannel: OtpChannel.EMAIL,
+      country: 'Egypt',
+      dialCode: '+20',
+      phone: '1012345678',
+      countryCode: 'EG',
+    };
+    await expect(pipe.transform(payload, body(RegisterDto))).resolves.toMatchObject({
+      name: 'New User',
+      email: 'new@example.com',
+      phone: '1012345678',
+      password: 'password123',
+      countryCode: 'EG',
+    });
+  });
+
+  it('accepts the frontend register fallback payload (full intl phone, no dialCode)', async () => {
+    const payload = {
+      name: 'New User',
+      email: 'new@example.com',
+      password: 'password123',
+      verificationChannel: OtpChannel.EMAIL,
+      phone: '+20201234567890',
+      countryCode: 'EG',
+    };
+    await expect(pipe.transform(payload, body(RegisterDto))).resolves.toMatchObject({
+      name: 'New User',
+      email: 'new@example.com',
+      phone: '+20201234567890',
+      password: 'password123',
+      countryCode: 'EG',
+    });
+  });
+
+  it('rejects a malformed phone on registration', async () => {
+    const messages = await validationMessages(
+      { name: 'New User', email: 'new@example.com', password: 'password123', phone: 'abc' },
+      RegisterDto,
+    );
+    expect(messages).toContain('Phone must be a valid international or national number');
+  });
+
+  it('accepts the register email payload without phone', async () => {
+    const payload = {
+      name: 'New User',
+      email: 'new@example.com',
+      password: 'password123',
+      verificationChannel: OtpChannel.EMAIL,
+    };
+    await expect(pipe.transform(payload, body(RegisterDto))).resolves.toMatchObject({
+      email: 'new@example.com',
+    });
+  });
+
+  it('accepts a phone on the OTP send request (send-otp)', async () => {
+    const payload = {
+      email: 'new@example.com',
+      purpose: 'EMAIL_VERIFICATION',
+      channel: OtpChannel.SMS,
+      phone: '+14155552671',
+    };
+    await expect(pipe.transform(payload, body(SendOtpDto))).resolves.toMatchObject({
+      phone: '+14155552671',
+      channel: OtpChannel.SMS,
+    });
+  });
+
+  it('rejects a malformed phone on the OTP send request', async () => {
+    const messages = await validationMessages(
+      { email: 'new@example.com', purpose: 'EMAIL_VERIFICATION', phone: 'abc' },
+      SendOtpDto,
+    );
+    expect(messages).toContain('Phone must be in international format');
+  });
+
+  it('accepts an email-only resend-verification request', async () => {
+    const payload = { email: 'new@example.com' };
+    await expect(pipe.transform(payload, body(ResendVerificationDto))).resolves.toMatchObject({
+      email: 'new@example.com',
+    });
+  });
+
+  it('rejects a phone on the resend-verification request', async () => {
+    const messages = await validationMessages(
+      { email: 'new@example.com', phone: '+14155552671' },
+      ResendVerificationDto,
+    );
+    expect(messages).toContain('property phone should not exist');
+  });
+
+  it('accepts the full registration form (country + dialCode + phone)', async () => {
+    const payload = {
+      name: 'New User',
+      email: 'new@example.com',
+      password: 'password123',
+      country: 'Egypt',
+      dialCode: '+20',
+      phone: '201234567890',
+    };
+    await expect(pipe.transform(payload, body(RegisterDto))).resolves.toMatchObject({
+      name: 'New User',
+      email: 'new@example.com',
+      password: 'password123',
+      country: 'Egypt',
+      dialCode: '+20',
+      phone: '201234567890',
+    });
+  });
+
+  it('accepts confirmPassword on registration when provided', async () => {
+    const payload = {
+      name: 'New User',
+      email: 'new@example.com',
+      password: 'password123',
+      confirmPassword: 'password123',
+      country: 'Egypt',
+      dialCode: '+20',
+      phone: '01012345678',
+    };
+    await expect(pipe.transform(payload, body(RegisterDto))).resolves.toMatchObject({
+      name: 'New User',
+      email: 'new@example.com',
+      password: 'password123',
+      confirmPassword: 'password123',
+      phone: '01012345678',
+    });
+  });
+
+  it('rejects an unknown field on the registration form (strict validation kept)', async () => {
+    const messages = await validationMessages(
+      { name: 'New User', email: 'new@example.com', password: 'password123', junk: true },
+      RegisterDto,
+    );
+    expect(messages).toContain('property junk should not exist');
+  });
+});
