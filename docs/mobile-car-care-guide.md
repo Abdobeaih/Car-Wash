@@ -62,7 +62,7 @@ npm run dev:api   # API at http://localhost:3001
 npm run dev:web   # Web at http://localhost:3000
 ```
 
-On the first API start, the seed module creates demo catalog records and users when appropriate. Development credentials are printed to the API console. Do not reuse demo credentials or a development JWT secret in production.
+On the first API start, the seed module creates demo catalog records. Login accounts are seeded only when the SEED_ADMIN_* or SEED_CUSTOMER_* environment variables are set; there are no default credentials. Use a long random JWT secret in production.
 
 ## 5. Customer workflow
 
