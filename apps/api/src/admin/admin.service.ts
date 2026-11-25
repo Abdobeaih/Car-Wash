@@ -1,4 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { User, UserDocument } from '../users/schemas/user.schema';
@@ -10,9 +16,14 @@ import { CreateAddOnDto, UpdateAddOnDto } from '../addons/dto/addon.dto';
 import { UpdateBookingStatusDto } from './dto/update-booking-status.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { UserRole } from '../common/constants/roles';
+import { analyticsMoney, analyticsRange } from './analytics.util';
+import { RecordPaymentDto } from './dto/record-payment.dto';
+import { slugify } from '../common/utils/slugify';
 
 @Injectable()
 export class AdminService {
+  private readonly logger = new Logger(AdminService.name);
+
   constructor(
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     @InjectModel(Booking.name) private readonly bookingModel: Model<BookingDocument>,
@@ -22,28 +33,182 @@ export class AdminService {
   ) {}
 
   async getDashboard() {
-    const [totalBookings, pending, confirmed, completed, customers, revenueAgg] = await Promise.all(
-      [
-        this.bookingModel.countDocuments(),
-        this.bookingModel.countDocuments({ status: BookingStatus.PENDING }),
-        this.bookingModel.countDocuments({ status: BookingStatus.CONFIRMED }),
-        this.bookingModel.countDocuments({ status: BookingStatus.COMPLETED }),
-        this.userModel.countDocuments({ role: UserRole.CUSTOMER }),
-        this.bookingModel.aggregate([
-          { $match: { status: { $nin: [BookingStatus.CANCELLED] } } },
-          { $group: { _id: null, total: { $sum: '$total' } } },
-        ]),
-      ],
-    );
-
+    const [counts, customers] = await Promise.all([
+      this.bookingModel.aggregate([
+        {
+          $group: {
+            _id: null,
+            totalBookings: { $sum: 1 },
+            pendingBookings: {
+              $sum: { $cond: [{ $eq: ['$status', BookingStatus.PENDING] }, 1, 0] },
+            },
+            confirmedBookings: {
+              $sum: { $cond: [{ $eq: ['$status', BookingStatus.CONFIRMED] }, 1, 0] },
+            },
+            completedBookings: {
+              $sum: { $cond: [{ $eq: ['$status', BookingStatus.COMPLETED] }, 1, 0] },
+            },
+            cancelledBookings: {
+              $sum: { $cond: [{ $eq: ['$status', BookingStatus.CANCELLED] }, 1, 0] },
+            },
+            revenue: { $sum: analyticsMoney.recordedPaid },
+            bookedValue: { $sum: analyticsMoney.bookedValue },
+            outstanding: { $sum: analyticsMoney.outstanding },
+          },
+        },
+      ]),
+      this.userModel.countDocuments({ role: UserRole.CUSTOMER }),
+    ]);
     return {
-      totalBookings,
-      pendingBookings: pending,
-      confirmedBookings: confirmed,
-      completedBookings: completed,
+      totalBookings: 0,
+      pendingBookings: 0,
+      confirmedBookings: 0,
+      completedBookings: 0,
+      cancelledBookings: 0,
+      revenue: 0,
+      bookedValue: 0,
+      outstanding: 0,
+      ...counts[0],
+      _id: undefined,
       customers,
-      revenue: revenueAgg.length > 0 ? revenueAgg[0].total : 0,
     };
+  }
+
+  async getAnalytics(start?: string, end?: string) {
+    const range = analyticsRange(start, end);
+    const moneyGroup = Object.fromEntries(
+      Object.entries(analyticsMoney).map(([key, value]) => [key, { $sum: value }]),
+    );
+    const [result] = await this.bookingModel.aggregate([
+      { $match: { date: { $gte: range.start, $lte: range.end } } },
+      {
+        $facet: {
+          summary: [
+            {
+              $group: {
+                _id: null,
+                bookings: { $sum: 1 },
+                ...moneyGroup,
+                completed: {
+                  $sum: { $cond: [{ $eq: ['$status', BookingStatus.COMPLETED] }, 1, 0] },
+                },
+                cancelled: {
+                  $sum: { $cond: [{ $eq: ['$status', BookingStatus.CANCELLED] }, 1, 0] },
+                },
+              },
+            },
+          ],
+          daily: [
+            { $group: { _id: '$date', bookings: { $sum: 1 }, ...moneyGroup } },
+            { $sort: { _id: 1 } },
+          ],
+          statuses: [{ $group: { _id: '$status', count: { $sum: 1 } } }],
+          services: [
+            { $match: { status: { $ne: BookingStatus.CANCELLED } } },
+            {
+              $project: {
+                items: {
+                  $cond: [
+                    { $gt: [{ $size: { $ifNull: ['$services', []] } }, 0] },
+                    '$services',
+                    [{ serviceId: '$serviceId', subtotal: '$subtotal' }],
+                  ],
+                },
+              },
+            },
+            { $unwind: '$items' },
+            {
+              $group: {
+                _id: '$items.serviceId',
+                count: { $sum: 1 },
+                baseValue: { $sum: '$items.subtotal' },
+              },
+            },
+            { $sort: { count: -1, _id: 1 } },
+            { $limit: 10 },
+            {
+              $lookup: {
+                from: this.serviceModel.collection.name,
+                localField: '_id',
+                foreignField: '_id',
+                as: 'catalog',
+              },
+            },
+            {
+              $project: {
+                _id: 1,
+                count: 1,
+                baseValue: 1,
+                name: { $ifNull: [{ $arrayElemAt: ['$catalog.name', 0] }, 'Archived service'] },
+              },
+            },
+          ],
+          customers: [
+            { $match: { status: { $ne: BookingStatus.CANCELLED } } },
+            { $group: { _id: '$customerId', count: { $sum: 1 } } },
+            {
+              $group: {
+                _id: null,
+                unique: { $sum: 1 },
+                returning: { $sum: { $cond: [{ $gt: ['$count', 1] }, 1, 0] } },
+              },
+            },
+          ],
+        },
+      },
+    ]);
+    return {
+      range,
+      summary: {
+        bookings: 0,
+        completed: 0,
+        cancelled: 0,
+        bookedValue: 0,
+        completedValue: 0,
+        recordedPaid: 0,
+        outstanding: 0,
+        cancelledPaid: 0,
+        ...result?.summary?.[0],
+        _id: undefined,
+      },
+      daily: result?.daily ?? [],
+      statuses: result?.statuses ?? [],
+      services: result?.services ?? [],
+      customers: { unique: 0, returning: 0, ...result?.customers?.[0], _id: undefined },
+    };
+  }
+
+  async recordPayment(id: string, dto: RecordPaymentDto, recordedBy: string) {
+    const booking = await this.bookingModel.findById(id).exec();
+    if (!booking) throw new NotFoundException('Booking not found.');
+    if (booking.enrollmentId)
+      throw new BadRequestException('Plan visits have no separate payment record.');
+    if (booking.paymentStatus === dto.paymentStatus) return this.getBooking(id);
+    if (booking.status === BookingStatus.CANCELLED) {
+      throw new BadRequestException(
+        'Cancelled bookings need separate refund reconciliation; payment records cannot be changed here.',
+      );
+    }
+    const updated = await this.bookingModel
+      .findOneAndUpdate(
+        { _id: id, paymentStatus: booking.paymentStatus, status: { $ne: BookingStatus.CANCELLED } },
+        {
+          $set: { paymentStatus: dto.paymentStatus },
+          $push: {
+            paymentHistory: {
+              status: dto.paymentStatus,
+              recordedBy,
+              recordedAt: new Date(),
+              reference: dto.reference?.trim(),
+            },
+          },
+        },
+        { returnDocument: 'after', runValidators: true },
+      )
+      .exec();
+    if (!updated)
+      throw new ConflictException('This booking changed. Refresh before recording payment.');
+    return this.getBooking(id);
   }
 
   async getCalendar(start?: string, end?: string) {
@@ -68,9 +233,13 @@ export class AdminService {
   }
 
   async createService(dto: CreateServiceDto) {
-    const slug = dto.slug ?? this.slugify(dto.name);
+    const slug = dto.slug ?? slugify(dto.name);
     const created = new this.serviceModel({ ...dto, slug });
-    return created.save();
+    try {
+      return await created.save();
+    } catch (error) {
+      this.rethrowServiceConflict(error);
+    }
   }
 
   async updateService(id: string, dto: UpdateServiceDto) {
@@ -82,7 +251,20 @@ export class AdminService {
       Object.entries(dto).filter(([, value]) => value !== undefined),
     );
     Object.assign(existing, patch);
-    return existing.save();
+    try {
+      return await existing.save();
+    } catch (error) {
+      this.rethrowServiceConflict(error);
+    }
+  }
+
+  private rethrowServiceConflict(error: unknown): never {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 11000) {
+      throw new ConflictException(
+        'A service with this address already exists. Choose a different slug.',
+      );
+    }
+    throw error;
   }
 
   async deleteService(id: string): Promise<void> {
@@ -120,13 +302,14 @@ export class AdminService {
 
     let ids: Types.ObjectId[] = [];
     if (search) {
-      const regex = new RegExp(search, 'i');
+      const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(escaped, 'i');
       const users = await this.userModel
         .find({ $or: [{ name: regex }, { email: regex }] }, { _id: 1 })
         .exec();
       ids = users.map((u) => u._id as Types.ObjectId);
       if (ids.length > 0) query.customerId = { $in: ids };
-      else query._id = new Types.ObjectId(); // no matches
+      else query._id = { $in: [] }; // no matches
     }
 
     return this.bookingModel
@@ -139,6 +322,7 @@ export class AdminService {
   async getBooking(id: string) {
     const booking = await this.bookingModel
       .findById(id)
+      .select('+paymentHistory')
       .populate('customerId vehicleId serviceId addOnIds services.serviceId services.addOnIds')
       .exec();
     if (!booking) {
@@ -152,6 +336,16 @@ export class AdminService {
     if (!booking) {
       throw new NotFoundException('Booking not found.');
     }
+    if (
+      booking.enrollmentId &&
+      booking.status === BookingStatus.CANCELLED &&
+      dto.status !== BookingStatus.CANCELLED
+    )
+      throw new BadRequestException(
+        'Cancelled plan visits cannot be restored. Book a new visit through the plan.',
+      );
+    if (booking.enrollmentId && dto.status === BookingStatus.CANCELLED)
+      throw new BadRequestException('Use the plan visit cancellation workflow.');
     const previousStatus = booking.status;
     booking.status = dto.status;
     const saved = await booking.save();
@@ -160,14 +354,20 @@ export class AdminService {
       { path: 'vehicleId' },
       { path: 'serviceId' },
       { path: 'addOnIds' },
+      { path: 'services.serviceId' },
+      { path: 'services.addOnIds' },
     ]);
 
     if (previousStatus !== dto.status) {
-      await this.notificationsService.createBookingStatusNotification(
-        booking.customerId,
-        populated,
-        dto.status,
-      );
+      try {
+        await this.notificationsService.createBookingStatusNotification(
+          booking.customerId,
+          populated,
+          dto.status,
+        );
+      } catch (err) {
+        this.logger.warn('Failed to create booking status notification', err as Error);
+      }
     }
 
     return populated;
@@ -176,33 +376,29 @@ export class AdminService {
   async getCustomers(search?: string) {
     const query: Record<string, unknown> = { role: UserRole.CUSTOMER };
     if (search) {
-      const regex = { $regex: search, $options: 'i' } as unknown;
+      const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = { $regex: escaped, $options: 'i' } as unknown;
       query.$or = [{ name: regex }, { email: regex }];
     }
 
     const customers = await this.userModel.find(query).sort({ createdAt: -1 }).lean().exec();
 
-    return Promise.all(
-      customers.map(async (c) => {
-        const bookingCount = await this.bookingModel.countDocuments({
-          customerId: c._id.toString(),
-        });
-        return {
-          _id: c._id.toString(),
-          name: c.name,
-          email: c.email,
-          role: c.role,
-          bookingCount,
-          createdAt: c.createdAt,
-        };
-      }),
-    );
-  }
+    // Single aggregation replaces the N+1 countDocuments-per-customer pattern.
+    const counts = await this.bookingModel
+      .aggregate<{ _id: string; count: number }>([
+        { $match: { customerId: { $in: customers.map((c) => c._id) } } },
+        { $group: { _id: '$customerId', count: { $sum: 1 } } },
+      ])
+      .exec();
+    const countByCustomer = new Map(counts.map((c) => [c._id.toString(), c.count]));
 
-  private slugify(text: string): string {
-    return text
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/(^-|-$)/g, '');
+    return customers.map((c) => ({
+      _id: c._id.toString(),
+      name: c.name,
+      email: c.email,
+      role: c.role,
+      bookingCount: countByCustomer.get(c._id.toString()) ?? 0,
+      createdAt: c.createdAt,
+    }));
   }
 }
