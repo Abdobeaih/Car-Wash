@@ -69,6 +69,9 @@ export async function apiRequest<T>(
 
   const res = await fetch(`${API_URL}${path}`, {
     method,
+    // Bound read-only waits so a stalled API cannot leave session restoration
+    // or a dashboard spinner pending forever. Mutations are never retried.
+    signal: method === 'GET' ? AbortSignal.timeout(15000) : undefined,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
@@ -84,11 +87,15 @@ export async function apiRequest<T>(
 
   if (!res.ok) {
     const message = getErrorMessage(payload as ApiErrorShape, `Request failed with status ${res.status}`);
-    if (res.status === 401) {
-      clearToken();
-    }
+    // Individual action errors (e.g. wrong current password) must not log out
+    // a valid session. AuthProvider validates expiry through /auth/me.
     throw new ApiError(res.status, message);
   }
 
+  // A successful empty/malformed read is not usable data. Returning it would
+  // leave list pages in their loading state with no error or retry available.
+  if (method === 'GET' && payload == null) {
+    throw new ApiError(502, 'The service returned an invalid response. Please try again.');
+  }
   return payload as T;
 }
