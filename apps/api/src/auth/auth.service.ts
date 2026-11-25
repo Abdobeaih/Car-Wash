@@ -5,24 +5,70 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import * as crypto from 'crypto';
 import { UsersService } from '../users/users.service';
+import { OtpService } from '../otp/otp.service';
+import { OtpChannel, OtpPurpose } from '../otp/schemas/otp.schema';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ThrottlerException } from '@nestjs/throttler';
 import { UserRole } from '../common/constants/roles';
+
+// Minimal dial-code -> ISO 2-letter country map used to derive a normalized
+// `countryCode` when the frontend only submits a `dialCode`. Only the
+// registration form's most common entries are needed; unknown dial codes simply
+// leave `countryCode` unset (it stays optional on the User model).
+const DIAL_CODE_TO_COUNTRY: Record<string, string> = {
+  '1': 'US',
+  '20': 'EG',
+  '44': 'GB',
+  '49': 'DE',
+  '33': 'FR',
+  '34': 'ES',
+  '39': 'IT',
+  '61': 'AU',
+  '81': 'JP',
+  '82': 'KR',
+  '86': 'CN',
+  '91': 'IN',
+  '971': 'AE',
+  '966': 'SA',
+  '965': 'KW',
+  '974': 'QA',
+  '968': 'OM',
+  '973': 'BH',
+  '962': 'JO',
+  '9710': 'AE',
+  '55': 'BR',
+  '52': 'MX',
+  '7': 'RU',
+  '31': 'NL',
+  '32': 'BE',
+  '41': 'CH',
+  '46': 'SE',
+  '47': 'NO',
+  '48': 'PL',
+  '351': 'PT',
+  '30': 'GR',
+  '90': 'TR',
+};
 
 @Injectable()
 export class AuthService {
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
+    private readonly otpService: OtpService,
   ) {}
 
   async register(dto: RegisterDto) {
+    if (dto.confirmPassword && dto.confirmPassword !== dto.password) {
+      throw new BadRequestException('Passwords do not match.');
+    }
+
     const existing = await this.usersService.findByEmail(dto.email);
     if (existing) {
       throw new BadRequestException('An account with this email already exists.');
@@ -33,25 +79,93 @@ export class AuthService {
       throw new BadRequestException('Admin accounts cannot be created through registration.');
     }
 
+    // Registration verification is email-only. The phone number is stored as
+    // account data, but it is NEVER used for OTP/verification. The channel is
+    // forced to EMAIL regardless of any client-provided `verificationChannel`,
+    // so no SMS/phone OTP can be triggered through registration.
+    const channel = OtpChannel.EMAIL;
+    const phone = this.resolvePhone(dto);
+
     const user = await this.usersService.create({
       name: dto.name,
       email: dto.email,
       password: dto.password,
+      phone,
+      countryCode: this.resolveCountryCode(dto),
+      verificationChannel: channel,
       role: UserRole.CUSTOMER,
     });
 
-    return { user, token: this.signToken(user._id, user.email, user.role) };
+    let devOtp: string | undefined;
+    try {
+      devOtp = await this.otpService.requestOtp(dto.email, OtpPurpose.EMAIL_VERIFICATION, channel);
+    } catch (err) {
+      await this.usersService.deleteUser(user._id);
+      throw err;
+    }
+
+    return {
+      user,
+      message:
+        'Account created. A verification code was sent to your email. Please verify your email to log in.',
+      ...(devOtp !== undefined ? { devOtp } : {}),
+    };
+  }
+
+  /**
+   * Produces the canonical international phone number (e.g. "+20201234567890" or "+201012345678").
+   * The frontend submits `dialCode` (e.g. "+20") and `phone` (e.g. "01012345678" or "201234567890")
+   * separately; this joins them exactly once so we never store "+20+20..." and
+   * never lose the "+". Any national leading trunk zero (e.g. "010...") is stripped before joining.
+   * A single full-international `phone` is kept as-is.
+   */
+  private resolvePhone(dto: RegisterDto): string | undefined {
+    if (dto.dialCode) {
+      const dial = dto.dialCode.replace(/^\+/, '');
+      let number = (dto.phone ?? '').replace(/^\+/, '').replace(/[^\d]/g, '');
+      if (!number) return undefined;
+      if (number.length > 5 && number.startsWith('0')) {
+        number = number.replace(/^0+/, '');
+      }
+      return `+${dial}${number}`;
+    }
+    if (!dto.phone) return undefined;
+    return dto.phone.startsWith('+') ? dto.phone : `+${dto.phone}`;
+  }
+
+  /**
+   * Resolves the 2-letter country code from the form's `country` input or an
+   * explicit `countryCode`. The form may submit either "US"/"US" or a dial code
+   * ("+20"); we only persist a normalized ISO 2-letter code.
+   */
+  private resolveCountryCode(dto: RegisterDto): string | undefined {
+    if (dto.countryCode) return dto.countryCode.toUpperCase();
+    if (dto.country && /^[A-Za-z]{2}$/.test(dto.country)) return dto.country.toUpperCase();
+    if (dto.dialCode) return DIAL_CODE_TO_COUNTRY[dto.dialCode.replace(/^\+/, '')];
+    return undefined;
   }
 
   async login(dto: LoginDto) {
-    const user = await this.usersService.findByEmail(dto.email);
-    if (!user) {
+    const isAdminAlias = dto.email.trim().toLowerCase() === 'admin';
+    const email = isAdminAlias ? process.env.SEED_ADMIN_EMAIL : dto.email;
+    // Resolve only on the server. Never create a user or change its recovery email.
+    const user = email ? await this.usersService.findByEmail(email) : null;
+    if (!user || (isAdminAlias && user.role !== UserRole.ADMIN)) {
       throw new UnauthorizedException('Invalid email or password.');
     }
 
+    if (!(await this.usersService.consumeLoginAttempt(user._id.toString()))) {
+      throw new ThrottlerException('Too many login attempts. Please retry in one minute.');
+    }
     const valid = await this.usersService.verifyPassword(user, dto.password);
     if (!valid) {
       throw new UnauthorizedException('Invalid email or password.');
+    }
+
+    if (!user.emailVerified) {
+      throw new UnauthorizedException(
+        'Please verify your email before logging in. Check your inbox for a verification code.',
+      );
     }
 
     return {
@@ -59,14 +173,28 @@ export class AuthService {
         _id: user._id.toString(),
         name: user.name,
         email: user.email,
+        phone: user.phone,
+        countryCode: user.countryCode,
         role: user.role,
+        emailVerified: true,
       },
-      token: this.signToken(user._id.toString(), user.email, user.role),
+      token: this.signToken(user._id.toString(), user.email, user.role, user.tokenVersion ?? 0),
     };
   }
 
-  signToken(id: string, email: string, role: UserRole): string {
-    return this.jwtService.sign({ email, role }, { subject: id });
+  signToken(id: string, email: string, role: UserRole, ver = 0): string {
+    return this.jwtService.sign(
+      { email, role, ver },
+      {
+        subject: id,
+        ...(role === UserRole.ADMIN ? { expiresIn: '30m' } : {}),
+      },
+    );
+  }
+
+  async logout(userId: string) {
+    await this.usersService.revokeSessions(userId);
+    return { message: 'Logged out on all devices successfully', userId };
   }
 
   async getCurrentUser(userId: string) {
@@ -80,14 +208,16 @@ export class AuthService {
     }
     const newEmail = dto.email?.toLowerCase();
     if (newEmail && newEmail !== current.email) {
-      const existing = await this.usersService.findByEmail(newEmail);
-      if (existing && existing._id.toString() !== userId) {
-        throw new BadRequestException('An account with this email already exists.');
-      }
+      // A session alone must not be enough to redirect password recovery.
+      // Keep the current address until a dedicated verified-change flow exists.
+      throw new BadRequestException(
+        'Email changes require verification and are not available in profile settings.',
+      );
     }
     const updated = await this.usersService.updateProfile(userId, {
       name: dto.name,
       email: dto.email,
+      phone: dto.phone,
     });
     if (!updated) {
       throw new NotFoundException('User not found.');
@@ -113,37 +243,51 @@ export class AuthService {
     if (!user) {
       return {
         message: 'If an account exists for this email, a reset code will be provided.',
-        resetToken: null,
       };
     }
-    const resetToken = crypto.randomBytes(32).toString('hex');
-    const tokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
-    const expires = new Date(Date.now() + 60 * 60 * 1000);
-    await this.usersService.setPasswordReset(user._id.toString(), tokenHash, expires);
+    await this.otpService.requestOtp(dto.email, OtpPurpose.PASSWORD_RESET, OtpChannel.EMAIL);
     return {
-      message:
-        'A password reset code was generated. (No email service is configured, so the code is returned below.)',
-      resetToken,
-      expiresInMinutes: 60,
+      message: 'If an account exists for this email, a reset code will be provided.',
     };
   }
 
   async resetPassword(dto: ResetPasswordDto) {
     const user = await this.usersService.findByEmail(dto.email);
-    if (!user || !user.passwordResetToken || !user.passwordResetExpires) {
+    if (!user) {
       throw new BadRequestException('No active password reset request for this email.');
     }
-    if (user.passwordResetExpires.getTime() < Date.now()) {
-      throw new BadRequestException(
-        'This password reset code has expired. Please request a new one.',
-      );
-    }
-    const tokenHash = crypto.createHash('sha256').update(dto.token).digest('hex');
-    if (tokenHash !== user.passwordResetToken) {
-      throw new BadRequestException('Invalid password reset code.');
-    }
+    await this.otpService.verifyOtp(dto.email, OtpPurpose.PASSWORD_RESET, dto.otp);
     await this.usersService.updatePassword(user._id.toString(), dto.newPassword);
-    await this.usersService.clearPasswordReset(user._id.toString());
     return { message: 'Password reset successfully. You can now log in.' };
+  }
+
+  async verifyEmail(email: string, otp: string) {
+    const user = await this.usersService.findByEmail(email);
+    if (!user) {
+      throw new NotFoundException('User not found.');
+    }
+    await this.otpService.verifyOtp(email, OtpPurpose.EMAIL_VERIFICATION, otp);
+    await this.usersService.markEmailVerified(user._id.toString());
+    return { message: 'Email verified successfully. You can now log in.' };
+  }
+
+  async resendVerificationOtp(email: string) {
+    const user = await this.usersService.findByEmail(email);
+    if (!user) {
+      throw new NotFoundException('User not found.');
+    }
+    if (user.emailVerified) {
+      throw new BadRequestException('This email is already verified.');
+    }
+    // Email-only verification: the code is always delivered to the account email.
+    const devOtp = await this.otpService.requestOtp(
+      email,
+      OtpPurpose.EMAIL_VERIFICATION,
+      OtpChannel.EMAIL,
+    );
+    return {
+      message: 'A new verification code has been sent to your email.',
+      ...(devOtp !== undefined ? { devOtp } : {}),
+    };
   }
 }
