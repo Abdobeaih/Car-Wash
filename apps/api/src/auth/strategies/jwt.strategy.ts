@@ -7,11 +7,13 @@ import { Model } from 'mongoose';
 import { User, UserDocument } from '../../users/schemas/user.schema';
 import { RequestUser } from '../../common/interfaces/request-user.interface';
 import { UserRole } from '../../common/constants/roles';
+import { resolveJwtSecret } from '../jwt.config';
 
 export interface JwtPayload {
   sub: string;
   email: string;
   role: UserRole;
+  ver?: number;
 }
 
 @Injectable()
@@ -23,7 +25,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: configService.get<string>('JWT_SECRET') ?? 'dev-secret',
+      secretOrKey: resolveJwtSecret(configService),
     });
   }
 
@@ -31,6 +33,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     const user = await this.userModel.findById(payload.sub).lean().exec();
     if (!user) {
       throw new UnauthorizedException('Account no longer exists.');
+    }
+    if ((payload.ver ?? 0) !== (user.tokenVersion ?? 0)) {
+      throw new UnauthorizedException('Session expired. Please log in again.');
+    }
+    if (!user.emailVerified) {
+      throw new UnauthorizedException(
+        'Your email is not verified. Please verify your email to continue.',
+      );
     }
     return {
       id: user._id.toString(),
