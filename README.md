@@ -57,16 +57,13 @@ MongoDB is the single source of truth for pricing & availability.
 
 ```bash
 npm install
-
-cp .env.example .env
-cp apps/api/.env.example apps/api/.env
-cp apps/web/.env.example apps/web/.env.local
-
 npm run dev:api     # http://localhost:3001
 npm run dev:web     # http://localhost:3000
 ```
 
-The API seeds demo services, add-ons, and users on first run (credentials printed to console | dev only).
+Create the environment files listed below before starting the apps. Values are private to each deployment, so they are not stored in this repository.
+
+The API seeds the demo service catalog on first run. Login accounts are created only when the optional SEED_* variables below are set; this repository contains no credentials.
 
 ### Env Variables
 
@@ -74,10 +71,12 @@ The API seeds demo services, add-ons, and users on first run (credentials printe
 | -------- | ----- | ----------- |
 | `DATABASE_URL` | `apps/api/.env` | MongoDB connection string |
 | `JWT_SECRET` | `apps/api/.env` | JWT signing secret |
-| `JWT_EXPIRES_IN` | `apps/api/.env` | Token lifetime (e.g. `7d`) |
+| `JWT_EXPIRES_IN` | `apps/api/.env` | Token lifetime |
 | `PORT` | `apps/api/.env` | Backend port |
 | `CORS_ORIGINS` | `apps/api/.env` | Allowed origins (comma-separated) |
 | `NEXT_PUBLIC_API_URL` | `apps/web/.env.local` | Backend base URL |
+| `SEED_ADMIN_NAME` / `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` | `apps/api/.env` | Optional first-run admin account; leave unset to skip |
+| `SEED_CUSTOMER_NAME` / `SEED_CUSTOMER_EMAIL` / `SEED_CUSTOMER_PASSWORD` | `apps/api/.env` | Optional first-run demo customer; leave unset to skip |
 
 ### Commands
 
